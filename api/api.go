@@ -84,11 +84,7 @@ func Setup(m *http.ServeMux, idx *searcher.Pool) {
 		var result map[string]*config.Repo
 		json.Unmarshal(body, &result)
 		for _, repo := range result {
-			str, _ := json.Marshal(repo);
-			fmt.Println(string(str))
 			config.InitRepo(repo)
-			str, _ = json.Marshal(repo);
-			fmt.Println(string(str))
 		}
 		idx.AddRepos(result)
 	})
@@ -146,9 +142,7 @@ func Setup(m *http.ServeMux, idx *searcher.Pool) {
 	m.HandleFunc("/api/v1/excludes", func(w http.ResponseWriter, r *http.Request) {
 		repo := r.FormValue("repo")
 		res := idx.Searchers[repo].GetExcludedFiles()
-		w.Header().Set("Content-Type", "application/json;charset=utf-8")
-		w.Header().Set("Access-Control-Allow", "*")
-		fmt.Fprint(w, res)
+		writeResp(w, res)
 	})
 
 	m.HandleFunc("/api/v1/update", func(w http.ResponseWriter, r *http.Request) {

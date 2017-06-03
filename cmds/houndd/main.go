@@ -67,10 +67,19 @@ func main() {
 		panic(err)
 	}
 
+	host := *flagAddr
+	if strings.HasPrefix(host, ":") {
+		host = "localhost" + host
+	}
+
+	info_log.Printf("running server at http://%s...\n", host)
+	idx, ok, err := searcher.NewPool(&cfg)
+	go runHttp(*flagAddr, *flagDev, &cfg, idx)
+
 	// It's not safe to be killed during makeSearchers, so register the
 	// shutdown signal here and defer processing it until we are ready.
 	shutdownCh := registerShutdownSignal()
-	idx, ok, err := searcher.NewPool(&cfg)
+
 	if err != nil {
 		log.Panic(err)
 	}
@@ -79,16 +88,6 @@ func main() {
 	}
 	idx.Index()
 
-	go handleShutdown(idx, shutdownCh)
+	handleShutdown(idx, shutdownCh)
 
-	host := *flagAddr
-	if strings.HasPrefix(host, ":") {
-		host = "localhost" + host
-	}
-
-	info_log.Printf("running server at http://%s...\n", host)
-
-	if err := runHttp(*flagAddr, *flagDev, &cfg, idx); err != nil {
-		panic(err)
-	}
 }

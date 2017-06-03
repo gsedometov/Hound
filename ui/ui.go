@@ -38,7 +38,7 @@ type prdHandler struct {
 	//cfgJson string
 
 	// the config we are running on
-	cfg *config.Config
+	//cfg *config.Config
 }
 
 func (h *devHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +108,6 @@ func serveAsset(w http.ResponseWriter, r *http.Request, name string) {
 		http.NotFound(w, r)
 		return
 	}
-
 	http.ServeContent(w, r, n.Name(), n.ModTime(), bytes.NewReader(a))
 }
 
@@ -184,7 +183,7 @@ func newDevHandler(cfg *config.Config) (http.Handler, error) {
 }
 
 // Create an http.Handler for prd-mode.
-func newPrdHandler(cfg *config.Config) (http.Handler, error) {
+func newPrdHandler() (http.Handler, error) {
 	for _, cnt := range contents {
 		a, err := Asset(cnt.template)
 		if err != nil {
@@ -199,7 +198,6 @@ func newPrdHandler(cfg *config.Config) (http.Handler, error) {
 
 	return &prdHandler{
 		content: contents,
-		cfg:     cfg,
 	}, nil
 }
 
@@ -213,5 +211,5 @@ func Content(dev bool, cfg *config.Config) (http.Handler, error) {
 		return newDevHandler(cfg)
 	}
 
-	return newPrdHandler(cfg)
+	return newPrdHandler()
 }
