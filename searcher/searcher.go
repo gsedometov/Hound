@@ -18,13 +18,19 @@ import (
 	"github.com/etsy/hound/vcs"
 )
 
+type SearchResponse struct {
+	Repo string
+	Res  *index.SearchResponse
+	Err  error
+}
+
 type Searcher struct {
 	idx  *index.Index
 	lck  sync.RWMutex
 	Repo *config.Repo
 
 	// The channel is used to request updates from the API and
-	// to signal that it is ok for searchers to begin polling.
+	// to signal that it is ok for Searchers to begin polling.
 	// It has a buffer size of 1 to allow at most one pending
 	// update at a time.
 	updateCh chan time.Time
@@ -37,15 +43,6 @@ type Searcher struct {
 type empty struct{}
 type limiter chan bool
 
-/**
- * Holds a set of IndexRefs that were found in the dbpath at startup,
- * these indexes can be 'claimed' and re-used by newly created searchers.
- */
-type foundRefs struct {
-	refs    []*index.IndexRef
-	claimed map[*index.IndexRef]bool
-}
-
 func makeLimiter(n int) limiter {
 	return limiter(make(chan bool, n))
 }
@@ -56,44 +53,6 @@ func (l limiter) Acquire() {
 
 func (l limiter) Release() {
 	<-l
-}
-
-/**
- * Find an Index ref for the repo url and rev, returns nil if no such
- * ref exists.
- */
-func (r *foundRefs) find(url, rev string) *index.IndexRef {
-	for _, ref := range r.refs {
-		if ref.Url == url && ref.Rev == rev {
-			return ref
-		}
-	}
-	return nil
-}
-
-/**
- * Claim a ref for reuse. This ensures they ref will not be garbage
- * collected at the end of startup.
- */
-func (r *foundRefs) claim(ref *index.IndexRef) {
-	r.claimed[ref] = true
-}
-
-/**
- * Delete the directorires associated with all IndexRefs that were
- * found in the dbpath but were not claimed during startup.
- */
-func (r *foundRefs) removeUnclaimed() error {
-	for _, ref := range r.refs {
-		if r.claimed[ref] {
-			continue
-		}
-
-		if err := ref.Remove(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Perform atomic swap of index in the searcher so that the new
@@ -191,26 +150,6 @@ func nextIndexDir(dbpath string) string {
 	return filepath.Join(dbpath, fmt.Sprintf("idx-%08x", r))
 }
 
-// Read the refs associated with each of the index dirs
-// in the given dbpath.
-func findExistingRefs(dbpath string) (*foundRefs, error) {
-	dirs, err := filepath.Glob(filepath.Join(dbpath, "idx-*"))
-	if err != nil {
-		return nil, err
-	}
-
-	var refs []*index.IndexRef
-	for _, dir := range dirs {
-		r, _ := index.Read(dir)
-		refs = append(refs, r)
-	}
-
-	return &foundRefs{
-		refs:    refs,
-		claimed: map[*index.IndexRef]bool{},
-	}, nil
-}
-
 // Open an index at the given path. If the idxDir is already present, it will
 // simply open and use that index. If, however, the idxDir does not exist a new
 // one will be built.
@@ -252,7 +191,7 @@ func hashFor(name string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Create a normalized name for the vcs directory of this repo.
+// Create a normalized name for the vcs directory of this Repo.
 func vcsDirFor(repo *config.Repo) string {
 	return fmt.Sprintf("vcs-%s", hashFor(repo.Url))
 }
@@ -261,59 +200,7 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-// Make a searcher for each repo in the Config. This function kind of has a notion
-// of partial errors. First, if the error returned is non-nil then a fatal error has
-// occurred and no other return values are valid. If an error occurs that is specific
-// to a particular searcher, that searcher will not be present in the searcher map and
-// will have an error entry in the error map.
-func MakeAll(cfg *config.Config) (map[string]*Searcher, map[string]error, error) {
-	errs := map[string]error{}
-	searchers := map[string]*Searcher{}
-
-	refs, err := findExistingRefs(cfg.DbPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	lim := makeLimiter(cfg.MaxConcurrentIndexers)
-
-	for name, repo := range cfg.Repos {
-		s, err := newSearcher(cfg.DbPath, name, repo, refs, lim)
-		if err != nil {
-			log.Print(err)
-			errs[name] = err
-			continue
-		}
-
-		searchers[name] = s
-	}
-
-	if err := refs.removeUnclaimed(); err != nil {
-		return nil, nil, err
-	}
-
-	// after all the repos are in good shape, we start their polling
-	for _, s := range searchers {
-		s.begin()
-	}
-
-	return searchers, errs, nil
-}
-
-// Creates a new Searcher that is available for searches as soon as this returns.
-// This will pull or clone the target repo and start watching the repo for changes.
-func New(dbpath, name string, repo *config.Repo) (*Searcher, error) {
-	s, err := newSearcher(dbpath, name, repo, &foundRefs{}, makeLimiter(1))
-	if err != nil {
-		return nil, err
-	}
-
-	s.begin()
-
-	return s, nil
-}
-
-// Update the vcs and reindex the given repo.
+// Update the vcs and reindex the given Repo.
 func updateAndReindex(
 	s *Searcher,
 	dbpath,
@@ -418,49 +305,55 @@ func newSearcher(
 		doneCh:     make(chan empty),
 		shutdownCh: make(chan empty, 1),
 	}
+	go s.Run(dbpath, vcsDir, name, rev, wd, opt, lim)
 
-	go func() {
+	return s, nil
+}
 
-		// each searcher's poller is held until begin is called.
-		<-s.updateCh
+func (s *Searcher) Run(
+	dbpath, vcsDir, name string,
+	rev string,
+	wd *vcs.WorkDir,
+	opt *index.IndexOptions,
+	lim limiter) {
 
-		// if all forms of updating are turned off, we're done here.
-		if !repo.PollUpdatesEnabled() && !repo.PushUpdatesEnabled() {
+	// each searcher's poller is held until begin is called.
+	<-s.updateCh
+
+	// if all forms of updating are turned off, we're done here.
+	if !s.Repo.PollUpdatesEnabled() && !s.Repo.PushUpdatesEnabled() {
+		s.completeShutdown()
+		return
+	}
+
+	var delay time.Duration
+	if s.Repo.PollUpdatesEnabled() {
+		delay = time.Duration(s.Repo.MsBetweenPolls) * time.Millisecond
+	}
+
+	for {
+		// Wait for a signal to proceed
+		s.waitForUpdate(delay)
+
+		if s.shutdownRequested {
 			s.completeShutdown()
 			return
 		}
 
-		var delay time.Duration
-		if repo.PollUpdatesEnabled() {
-			delay = time.Duration(repo.MsBetweenPolls) * time.Millisecond
+		// attempt to update and reindex this searcher
+		_, ok := updateAndReindex(s, dbpath, vcsDir, name, rev, wd, opt, lim)
+		if !ok {
+			continue
 		}
 
-		for {
-			// Wait for a signal to proceed
-			s.waitForUpdate(delay)
+		//rev = newRev
 
-			if s.shutdownRequested {
-				s.completeShutdown()
-				return
-			}
+		// This is just a good time to GC since we know there will be a
+		// whole set of dead posting lists on the heap. Ensuring these
+		// go away quickly helps to prevent the heap from expanding
+		// uncessarily.
+		runtime.GC()
 
-			// attempt to update and reindex this searcher
-			newRev, ok := updateAndReindex(s, dbpath, vcsDir, name, rev, wd, opt, lim)
-			if !ok {
-				continue
-			}
-
-			rev = newRev
-
-			// This is just a good time to GC since we know there will be a
-			// whole set of dead posting lists on the heap. Ensuring these
-			// go away quickly helps to prevent the heap from expanding
-			// uncessarily.
-			runtime.GC()
-
-			reportOnMemory()
-		}
-	}()
-
-	return s, nil
+		reportOnMemory()
+	}
 }

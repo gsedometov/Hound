@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -24,78 +23,17 @@ var (
 	error_log *log.Logger
 )
 
-func makeSearchers(cfg *config.Config) (map[string]*searcher.Searcher, bool, error) {
-	// Ensure we have a dbpath
-	if _, err := os.Stat(cfg.DbPath); err != nil {
-		if err := os.MkdirAll(cfg.DbPath, os.ModePerm); err != nil {
-			return nil, false, err
-		}
-	}
-
-	searchers, errs, err := searcher.MakeAll(cfg)
-	if err != nil {
-		return nil, false, err
-	}
-
-	if len(errs) > 0 {
-		// NOTE: This mutates the original config so the repos
-		// are not even seen by other code paths.
-		for name, _ := range errs {
-			delete(cfg.Repos, name)
-		}
-
-		return searchers, false, nil
-	}
-
-	return searchers, true, nil
-}
-
-func handleShutdown(shutdownCh <-chan os.Signal, searchers map[string]*searcher.Searcher) {
-	go func() {
-		<-shutdownCh
-		info_log.Printf("Graceful shutdown requested...")
-		for _, s := range searchers {
-			s.Stop()
-		}
-
-		for _, s := range searchers {
-			s.Wait()
-		}
-
-		os.Exit(0)
-	}()
-}
-
 func registerShutdownSignal() <-chan os.Signal {
 	shutdownCh := make(chan os.Signal, 1)
 	signal.Notify(shutdownCh, gracefulShutdownSignal)
 	return shutdownCh
 }
 
-func makeTemplateData(cfg *config.Config) (interface{}, error) {
-	var data struct {
-		ReposAsJson string
-	}
-
-	res := map[string]*config.Repo{}
-	for name, repo := range cfg.Repos {
-		res[name] = repo
-	}
-
-	b, err := json.Marshal(res)
-	if err != nil {
-		return nil, err
-	}
-
-	data.ReposAsJson = string(b)
-	return &data, nil
-}
-
 func runHttp(
 	addr string,
 	dev bool,
 	cfg *config.Config,
-	idx map[string]*searcher.Searcher) error {
+	idx *searcher.Pool) error {
 	m := http.DefaultServeMux
 
 	h, err := ui.Content(dev, cfg)
@@ -104,8 +42,13 @@ func runHttp(
 	}
 
 	m.Handle("/", h)
-	api.Setup(m, idx)
+	api.Setup(m, idx.Searchers)
 	return http.ListenAndServe(addr, m)
+}
+
+func handleShutdown(pool *searcher.Pool, ch <-chan os.Signal) {
+	pool.Shutdown(ch)
+	os.Exit(0)
 }
 
 func main() {
@@ -127,7 +70,7 @@ func main() {
 	// It's not safe to be killed during makeSearchers, so register the
 	// shutdown signal here and defer processing it until we are ready.
 	shutdownCh := registerShutdownSignal()
-	idx, ok, err := makeSearchers(&cfg)
+	idx, ok, err := searcher.MakePool(&cfg)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -137,7 +80,7 @@ func main() {
 		info_log.Println("All indexes built!")
 	}
 
-	handleShutdown(shutdownCh, idx)
+	go handleShutdown(idx, shutdownCh)
 
 	host := *flagAddr
 	if strings.HasPrefix(host, ":") {

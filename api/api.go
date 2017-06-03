@@ -1,13 +1,9 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/etsy/hound/config"
@@ -23,31 +19,6 @@ const (
 type Stats struct {
 	FilesOpened int
 	Duration    int
-}
-
-func writeJson(w http.ResponseWriter, data interface{}, status int) {
-	w.Header().Set("Content-Type", "application/json;charset=utf-8")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Panicf("Failed to encode JSON: %v\n", err)
-	}
-}
-
-func writeResp(w http.ResponseWriter, data interface{}) {
-	writeJson(w, data, http.StatusOK)
-}
-
-func writeError(w http.ResponseWriter, err error, status int) {
-	writeJson(w, map[string]string{
-		"Error": err.Error(),
-	}, status)
-}
-
-type searchResponse struct {
-	repo string
-	res  *index.SearchResponse
-	err  error
 }
 
 /**
@@ -66,97 +37,32 @@ func searchAll(
 	n := len(repos)
 
 	// use a buffered channel to avoid routine leaks on errs.
-	ch := make(chan *searchResponse, n)
+	ch := make(chan *searcher.SearchResponse, n)
 	for _, repo := range repos {
 		go func(repo string) {
 			fms, err := idx[repo].Search(query, opts)
-			ch <- &searchResponse{repo, fms, err}
+			ch <- &searcher.SearchResponse{repo, fms, err}
 		}(repo)
 	}
 
 	res := map[string]*index.SearchResponse{}
 	for i := 0; i < n; i++ {
 		r := <-ch
-		if r.err != nil {
-			return nil, r.err
+		if r.Err != nil {
+			return nil, r.Err
 		}
 
-		if r.res.Matches == nil {
+		if r.Res.Matches == nil {
 			continue
 		}
 
-		res[r.repo] = r.res
-		*filesOpened += r.res.FilesOpened
+		res[r.Repo] = r.Res
+		*filesOpened += r.Res.FilesOpened
 	}
 
 	*duration = int(time.Now().Sub(startedAt).Seconds() * 1000)
 
 	return res, nil
-}
-
-// Used for parsing flags from form values.
-func parseAsBool(v string) bool {
-	v = strings.ToLower(v)
-	return v == "true" || v == "1" || v == "fosho"
-}
-
-func parseAsRepoList(v string, idx map[string]*searcher.Searcher) []string {
-	v = strings.TrimSpace(v)
-	var repos []string
-	if v == "*" {
-		for repo := range idx {
-			repos = append(repos, repo)
-		}
-		return repos
-	}
-
-	for _, repo := range strings.Split(v, ",") {
-		if idx[repo] == nil {
-			continue
-		}
-		repos = append(repos, repo)
-	}
-	return repos
-}
-
-func parseAsUintValue(sv string, min, max, def uint) uint {
-	iv, err := strconv.ParseUint(sv, 10, 54)
-	if err != nil {
-		return def
-	}
-	if max != 0 && uint(iv) > max {
-		return max
-	}
-	if min != 0 && uint(iv) < min {
-		return max
-	}
-	return uint(iv)
-}
-
-func parseRangeInt(v string, i *int) {
-	*i = 0
-	if v == "" {
-		return
-	}
-
-	vi, err := strconv.ParseUint(v, 10, 64)
-	if err != nil {
-		return
-	}
-
-	*i = int(vi)
-}
-
-func parseRangeValue(rv string) (int, int) {
-	ix := strings.Index(rv, ":")
-	if ix < 0 {
-		return 0, 0
-	}
-
-	var b, e int
-	parseRangeInt(rv[:ix], &b)
-	parseRangeInt(rv[ix+1:], &e)
-	return b, e
 }
 
 func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
