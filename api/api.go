@@ -9,6 +9,9 @@ import (
 	"github.com/etsy/hound/config"
 	"github.com/etsy/hound/index"
 	"github.com/etsy/hound/searcher"
+	"io/ioutil"
+	"encoding/json"
+	"github.com/etsy/hound/status"
 )
 
 const (
@@ -65,22 +68,44 @@ func searchAll(
 	return res, nil
 }
 
-func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
+func Setup(m *http.ServeMux, idx *searcher.Pool) {
 
 	m.HandleFunc("/api/v1/repos", func(w http.ResponseWriter, r *http.Request) {
 		res := map[string]*config.Repo{}
-		for name, srch := range idx {
+		for name, srch := range idx.Searchers {
 			res[name] = srch.Repo
 		}
 
 		writeResp(w, res)
 	})
 
+	m.HandleFunc("/api/v1/repos/add", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := ioutil.ReadAll(r.Body)
+		var result map[string]*config.Repo
+		json.Unmarshal(body, &result)
+		for _, repo := range result {
+			str, _ := json.Marshal(repo);
+			fmt.Println(string(str))
+			config.InitRepo(repo)
+			str, _ = json.Marshal(repo);
+			fmt.Println(string(str))
+		}
+		idx.AddRepos(result)
+	})
+
+	m.HandleFunc("/api/v1/status", func(w http.ResponseWriter, r *http.Request) {
+		writeResp(w, struct {
+			status.Code
+			Message string
+		}{idx.Status,
+		  idx.Status.String()})
+	})
+
 	m.HandleFunc("/api/v1/search", func(w http.ResponseWriter, r *http.Request) {
 		var opt index.SearchOptions
 
 		stats := parseAsBool(r.FormValue("stats"))
-		repos := parseAsRepoList(r.FormValue("repos"), idx)
+		repos := parseAsRepoList(r.FormValue("repos"), idx.Searchers)
 		query := r.FormValue("q")
 		opt.Offset, opt.Limit = parseRangeValue(r.FormValue("rng"))
 		opt.FileRegexp = r.FormValue("files")
@@ -95,7 +120,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 		var filesOpened int
 		var durationMs int
 
-		results, err := searchAll(query, &opt, repos, idx, &filesOpened, &durationMs)
+		results, err := searchAll(query, &opt, repos, idx.Searchers, &filesOpened, &durationMs)
 		if err != nil {
 			// TODO(knorton): Return ok status because the UI expects it for now.
 			writeError(w, err, http.StatusOK)
@@ -120,7 +145,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 
 	m.HandleFunc("/api/v1/excludes", func(w http.ResponseWriter, r *http.Request) {
 		repo := r.FormValue("repo")
-		res := idx[repo].GetExcludedFiles()
+		res := idx.Searchers[repo].GetExcludedFiles()
 		w.Header().Set("Content-Type", "application/json;charset=utf-8")
 		w.Header().Set("Access-Control-Allow", "*")
 		fmt.Fprint(w, res)
@@ -134,10 +159,10 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 			return
 		}
 
-		repos := parseAsRepoList(r.FormValue("repos"), idx)
+		repos := parseAsRepoList(r.FormValue("repos"), idx.Searchers)
 
 		for _, repo := range repos {
-			searcher := idx[repo]
+			searcher := idx.Searchers[repo]
 			if searcher == nil {
 				writeError(w,
 					fmt.Errorf("No such repository: %s", repo),

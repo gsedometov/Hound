@@ -42,7 +42,7 @@ func runHttp(
 	}
 
 	m.Handle("/", h)
-	api.Setup(m, idx.Searchers)
+	api.Setup(m, idx)
 	return http.ListenAndServe(addr, m)
 }
 
@@ -70,15 +70,14 @@ func main() {
 	// It's not safe to be killed during makeSearchers, so register the
 	// shutdown signal here and defer processing it until we are ready.
 	shutdownCh := registerShutdownSignal()
-	idx, ok, err := searcher.MakePool(&cfg)
+	idx, ok, err := searcher.NewPool(&cfg)
 	if err != nil {
 		log.Panic(err)
 	}
 	if !ok {
 		info_log.Println("Some repos failed to index, see output above")
-	} else {
-		info_log.Println("All indexes built!")
 	}
+	idx.Index()
 
 	go handleShutdown(idx, shutdownCh)
 

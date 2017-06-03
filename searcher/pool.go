@@ -5,12 +5,16 @@ import (
 	"log"
 	"os"
 	"time"
-	"github.com/etsy/db/vcs-f47965ee76287ac9096d2200b88882933d54f755/searcher"
 	"github.com/etsy/hound/index"
+	"github.com/etsy/hound/status"
 )
 
 type Pool struct {
 	Searchers map[string]*Searcher
+	lim limiter
+	dbpath string
+	Status status.Code
+	cfg *config.Config
 }
 
 // Make a searcher for each Repo in the Config. This function kind of has a notion
@@ -18,18 +22,17 @@ type Pool struct {
 // occurred and no other return values are valid. If an error occurs that is specific
 // to a particular searcher, that searcher will not be present in the searcher map and
 // will have an error entry in the error map.
-func (pool *Pool) start(cfg *config.Config) (map[string]error, error) {
+func (pool *Pool) start() (map[string]error, error) {
 	errs := map[string]error{}
+	cfg := pool.cfg
 
-	refs, err := findExistingRefs(cfg.DbPath)
+	refs, err := findExistingRefs(pool.cfg.DbPath)
 	if err != nil {
 		return nil, err
 	}
 
-	lim := makeLimiter(cfg.MaxConcurrentIndexers)
-
 	for name, repo := range cfg.Repos {
-		s, err := newSearcher(cfg.DbPath, name, repo, refs, lim)
+		s, err := newSearcher(cfg.DbPath, name, repo, refs, pool.lim)
 		if err != nil {
 			log.Print(err)
 			errs[name] = err
@@ -51,29 +54,44 @@ func (pool *Pool) start(cfg *config.Config) (map[string]error, error) {
 	return errs, nil
 }
 
-func MakePool(cfg *config.Config) (*Pool, bool, error) {
-	pool := Pool{make(map[string]*Searcher)}
+func NewPool (cfg *config.Config) (*Pool, bool, error) {
+	pool := &Pool{
+		make(map[string]*Searcher),
+		makeLimiter(cfg.MaxConcurrentIndexers),
+		cfg.DbPath,
+		status.Starting,
+		cfg,
+	}
 	// Ensure we have a dbpath
 	if _, err := os.Stat(cfg.DbPath); err != nil {
 		if err := os.MkdirAll(cfg.DbPath, os.ModePerm); err != nil {
-			return nil, false, err
+			pool.Status = status.Error
+			return pool, false, err
 		}
 	}
+	return pool, true, nil
+}
 
-	errs, err := pool.start(cfg)
+func (pool *Pool) Index() (*Pool, bool, error) {
+	pool.Status = status.Indexing
+	errs, err := pool.start()
 	if err != nil {
+		pool.Status = status.Error
 		return nil, false, err
 	}
 
 	if len(errs) > 0 {
+		pool.Status = status.Error
 		log.Fatal(errs)
 	}
 
-	return &pool, true, nil
+	pool.Status = status.Ready
+	return pool, true, nil
 }
 
 func (pool *Pool) Shutdown(shutdownCh <-chan os.Signal) {
 	<-shutdownCh
+	pool.Status = status.Stopping
 	log.Printf("Graceful shutdown requested...")
 	for _, s := range pool.Searchers {
 		s.Stop()
@@ -125,4 +143,18 @@ func (pool *Pool) SearchAll(
 	*duration = int(time.Now().Sub(startedAt).Seconds() * 1000)
 
 	return res, nil
+}
+
+func (pool *Pool) AddRepos (repos map[string]*config.Repo){
+	for name, repo := range repos {
+		refs, err := findExistingRefs(pool.dbpath)
+		s, err := newSearcher(pool.dbpath, name, repo, refs, pool.lim)
+		if err != nil {
+			log.Print(err)
+			continue
+		}
+
+		pool.Searchers[name] = s
+		s.begin()
+	}
 }

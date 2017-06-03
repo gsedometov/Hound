@@ -87,7 +87,7 @@ func (r *Repo) VcsConfig() []byte {
 }
 
 // Populate missing config values with default values.
-func initRepo(r *Repo) {
+func InitRepo(r *Repo) {
 	if r.MsBetweenPolls == 0 {
 		r.MsBetweenPolls = defaultMsBetweenPoll
 	}
@@ -140,7 +140,7 @@ func (c *Config) LoadFromFile(filename string) error {
 	}
 
 	for _, repo := range c.Repos {
-		initRepo(repo)
+		InitRepo(repo)
 	}
 
 	initConfig(c)

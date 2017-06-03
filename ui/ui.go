@@ -11,6 +11,7 @@ import (
 	"runtime"
 
 	"github.com/etsy/hound/config"
+	"io/ioutil"
 )
 
 // An http.Handler for the dev-mode case.
@@ -34,7 +35,7 @@ type prdHandler struct {
 	content map[string]*content
 
 	// The config object as a json string
-	cfgJson string
+	//cfgJson string
 
 	// the config we are running on
 	cfg *config.Config
@@ -114,11 +115,16 @@ func serveAsset(w http.ResponseWriter, r *http.Request, name string) {
 func (h *prdHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 
+	//var model string
+	resp, _ := http.Get("http://localhost:6080/api/v1/repos")
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	model := string(bytes)
+
 	// see if we have a templated asset for this path
 	ct := h.content[p]
 	if ct != nil {
 		// if so, render it
-		if err := renderForPrd(w, ct, h.cfgJson, r); err != nil {
+		if err := renderForPrd(w, ct, model, r); err != nil {
 			log.Panic(err)
 		}
 		return
@@ -191,15 +197,9 @@ func newPrdHandler(cfg *config.Config) (http.Handler, error) {
 		}
 	}
 
-	json, err := cfg.ToJsonString()
-	if err != nil {
-		return nil, err
-	}
-
 	return &prdHandler{
 		content: contents,
 		cfg:     cfg,
-		cfgJson: json,
 	}, nil
 }
 
