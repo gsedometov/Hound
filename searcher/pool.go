@@ -91,7 +91,6 @@ func (pool *Pool) SearchAll(
 	query string,
 	opts *index.SearchOptions,
 	repos []string,
-	idx map[string]*searcher.Searcher,
 	filesOpened *int,
 	duration *int) (map[string]*index.SearchResponse, error) {
 
@@ -103,7 +102,7 @@ func (pool *Pool) SearchAll(
 	ch := make(chan *SearchResponse, n)
 	for _, repo := range repos {
 		go func(repo string) {
-			fms, err := idx[repo].Search(query, opts)
+			fms, err := pool.Searchers[repo].Search(query, opts)
 			ch <- &SearchResponse{repo, fms, err}
 		}(repo)
 	}
