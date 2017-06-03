@@ -12,6 +12,7 @@ import (
 
 	"github.com/etsy/hound/config"
 	"io/ioutil"
+	"encoding/json"
 )
 
 // An http.Handler for the dev-mode case.
@@ -148,6 +149,14 @@ func renderForPrd(w io.Writer, c *content, cfgJson string, r *http.Request) erro
 		}
 		buf.Write(a)
 	}
+	resp, _ := http.Get("http://127.0.0.1/api/v1/status")
+	var msg map[string]string
+	json.NewDecoder(resp.Body).Decode(msg)
+	if msg["Message"] == "Indexing" {
+		buf.WriteString("" +
+			"alert('WARNING: Hound is still indexing')")
+	}
+
 	buf.WriteString("</script>")
 
 	return c.tpl.Execute(w, map[string]interface{}{
