@@ -2,6 +2,7 @@ package status
 
 type Code int
 
+//go:generate stringer -type=Code
 const (
 	Starting Code = iota
 	Indexing
@@ -10,20 +11,3 @@ const (
 	Error
 	Undefined
 )
-
-func (c Code) String() string {
-	switch c {
-	case Starting:
-		return "Starting"
-	case Indexing:
-		return "Indexing"
-	case Ready:
-		return "Ready"
-	case Stopping:
-		return "Stopping"
-	case Error:
-		return "Error"
-	default:
-		return "Undefined"
-	}
-}
