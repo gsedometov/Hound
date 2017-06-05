@@ -25,7 +25,7 @@ type Stats struct {
 	Duration    int
 }
 
-func writeJson(w http.ResponseWriter, data interface{}, status int) {
+func writeJSON(w http.ResponseWriter, data interface{}, status int) {
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
@@ -35,11 +35,11 @@ func writeJson(w http.ResponseWriter, data interface{}, status int) {
 }
 
 func writeResp(w http.ResponseWriter, data interface{}) {
-	writeJson(w, data, http.StatusOK)
+	writeJSON(w, data, http.StatusOK)
 }
 
 func writeError(w http.ResponseWriter, err error, status int) {
-	writeJson(w, map[string]string{
+	writeJSON(w, map[string]string{
 		"Error": err.Error(),
 	}, status)
 }
