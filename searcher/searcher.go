@@ -32,6 +32,9 @@ type Searcher struct {
 	shutdownRequested bool
 	shutdownCh        chan empty
 	doneCh            chan empty
+
+	vcsDir string
+	lim limiter
 }
 
 type empty struct{}
@@ -311,21 +314,18 @@ func New(dbpath, name string, repo *config.Repo) (*Searcher, error) {
 }
 
 // Update the vcs and reindex the given repo.
-func updateAndReindex(
-	s *Searcher,
-	vcsDir,
+func (s *Searcher) updateAndReindex(
 	name,
 	rev string,
 	wd *vcs.WorkDir,
-	opt *index.IndexOptions,
-	lim limiter) (string, bool) {
+	opt *index.IndexOptions) (string, bool) {
 
 	// acquire a token from the rate limiter
-	lim.Acquire()
-	defer lim.Release()
+	s.lim.Acquire()
+	defer s.lim.Release()
 
 	repo := s.Repo
-	newRev, err := wd.PullOrClone(vcsDir, repo.Url)
+	newRev, err := wd.PullOrClone(s.vcsDir, repo.Url)
 
 	if err != nil {
 		log.Printf("vcs pull error (%s - %s): %s", name, repo.Url, err)
@@ -339,8 +339,8 @@ func updateAndReindex(
 	log.Printf("Rebuilding %s for %s", name, newRev)
 	idx, err := buildAndOpenIndex(
 		opt,
-		vcsDir,
-		nextIndexDir(vcsDir),
+		s.vcsDir,
+		nextIndexDir(s.vcsDir),
 		repo.Url,
 		newRev)
 	if err != nil {
@@ -411,14 +411,19 @@ func newSearcher(
 		Repo:       repo,
 		doneCh:     make(chan empty),
 		shutdownCh: make(chan empty, 1),
+		vcsDir: vcsDir,
+		lim: lim,
 	}
 
-	go s.Run(vcsDir, name, rev, wd, opt, lim)
+	go s.Run(name, rev, wd, opt)
 
 	return s, nil
 }
 
-func (s *Searcher) Run (vcsDir string, name string, rev string, wd *vcs.WorkDir, opt *index.IndexOptions, lim limiter) {
+func (s *Searcher) Run (
+	name, rev string,
+	wd *vcs.WorkDir,
+	opt *index.IndexOptions) {
 
 	// each searcher's poller is held until begin is called.
 	<-s.updateCh
@@ -444,7 +449,7 @@ func (s *Searcher) Run (vcsDir string, name string, rev string, wd *vcs.WorkDir,
 		}
 
 		// attempt to update and reindex this searcher
-		newRev, ok := updateAndReindex(s, vcsDir, name, rev, wd, opt, lim)
+		newRev, ok := s.updateAndReindex(name, rev, wd, opt)
 		if !ok {
 			continue
 		}
