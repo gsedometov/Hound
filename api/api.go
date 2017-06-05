@@ -174,7 +174,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 
 		stats := parseAsBool(r.FormValue("stats"))
 		repos := parseAsRepoList(r.FormValue("repos"), idx)
-		query := r.FormValue("q")
+		opt.Query = r.FormValue("q")
 		opt.Offset, opt.Limit = parseRangeValue(r.FormValue("rng"))
 		opt.FileRegexp = r.FormValue("files")
 		opt.ExcludeFileRegexp = r.FormValue("excludeFiles")
@@ -188,7 +188,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 		var filesOpened int
 		var durationMs int
 
-		results, err := searchAll(query, &opt, repos, idx, &filesOpened, &durationMs)
+		results, err := searchAll(&opt, repos, idx, &filesOpened, &durationMs)
 		if err != nil {
 			// TODO(knorton): Return ok status because the UI expects it for now.
 			writeError(w, err, http.StatusOK)

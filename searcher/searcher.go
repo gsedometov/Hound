@@ -313,7 +313,6 @@ func New(dbpath, name string, repo *config.Repo) (*Searcher, error) {
 // Update the vcs and reindex the given repo.
 func updateAndReindex(
 	s *Searcher,
-	dbpath,
 	vcsDir,
 	name,
 	rev string,
@@ -341,7 +340,7 @@ func updateAndReindex(
 	idx, err := buildAndOpenIndex(
 		opt,
 		vcsDir,
-		nextIndexDir(dbpath),
+		nextIndexDir(vcsDir),
 		repo.Url,
 		newRev)
 	if err != nil {
@@ -414,48 +413,50 @@ func newSearcher(
 		shutdownCh: make(chan empty, 1),
 	}
 
-	go func() {
+	go s.Run(vcsDir, name, rev, wd, opt, lim)
 
-		// each searcher's poller is held until begin is called.
-		<-s.updateCh
+	return s, nil
+}
 
-		// if all forms of updating are turned off, we're done here.
-		if !repo.PollUpdatesEnabled() && !repo.PushUpdatesEnabled() {
+func (s *Searcher) Run (vcsDir string, name string, rev string, wd *vcs.WorkDir, opt *index.IndexOptions, lim limiter) {
+
+	// each searcher's poller is held until begin is called.
+	<-s.updateCh
+
+	// if all forms of updating are turned off, we're done here.
+	if !s.Repo.PollUpdatesEnabled() && !s.Repo.PushUpdatesEnabled() {
+		s.completeShutdown()
+		return
+	}
+
+	var delay time.Duration
+	if s.Repo.PollUpdatesEnabled() {
+		delay = time.Duration(s.Repo.MsBetweenPolls) * time.Millisecond
+	}
+
+	for {
+		// Wait for a signal to proceed
+		s.waitForUpdate(delay)
+
+		if s.shutdownRequested {
 			s.completeShutdown()
 			return
 		}
 
-		var delay time.Duration
-		if repo.PollUpdatesEnabled() {
-			delay = time.Duration(repo.MsBetweenPolls) * time.Millisecond
+		// attempt to update and reindex this searcher
+		newRev, ok := updateAndReindex(s, vcsDir, name, rev, wd, opt, lim)
+		if !ok {
+			continue
 		}
 
-		for {
-			// Wait for a signal to proceed
-			s.waitForUpdate(delay)
+		rev = newRev
 
-			if s.shutdownRequested {
-				s.completeShutdown()
-				return
-			}
+		// This is just a good time to GC since we know there will be a
+		// whole set of dead posting lists on the heap. Ensuring these
+		// go away quickly helps to prevent the heap from expanding
+		// uncessarily.
+		runtime.GC()
 
-			// attempt to update and reindex this searcher
-			newRev, ok := updateAndReindex(s, dbpath, vcsDir, name, rev, wd, opt, lim)
-			if !ok {
-				continue
-			}
-
-			rev = newRev
-
-			// This is just a good time to GC since we know there will be a
-			// whole set of dead posting lists on the heap. Ensuring these
-			// go away quickly helps to prevent the heap from expanding
-			// uncessarily.
-			runtime.GC()
-
-			reportOnMemory()
-		}
-	}()
-
-	return s, nil
+		reportOnMemory()
+	}
 }
