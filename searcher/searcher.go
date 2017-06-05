@@ -34,7 +34,7 @@ type Searcher struct {
 	doneCh            chan empty
 
 	vcsDir string
-	lim limiter
+	lim    limiter
 }
 
 type empty struct{}
@@ -132,7 +132,7 @@ func (s *Searcher) GetExcludedFiles() string {
 
 // Triggers an immediate poll of the repository.
 func (s *Searcher) Update() bool {
-	if !s.Repo.PushUpdatesEnabled() {
+	if !s.Repo.PushUpdatesEnabled {
 		return false
 	}
 
@@ -411,8 +411,8 @@ func newSearcher(
 		Repo:       repo,
 		doneCh:     make(chan empty),
 		shutdownCh: make(chan empty, 1),
-		vcsDir: vcsDir,
-		lim: lim,
+		vcsDir:     vcsDir,
+		lim:        lim,
 	}
 
 	go s.Run(name, rev, wd, opt)
@@ -420,7 +420,7 @@ func newSearcher(
 	return s, nil
 }
 
-func (s *Searcher) Run (
+func (s *Searcher) Run(
 	name, rev string,
 	wd *vcs.WorkDir,
 	opt *index.IndexOptions) {
@@ -429,13 +429,13 @@ func (s *Searcher) Run (
 	<-s.updateCh
 
 	// if all forms of updating are turned off, we're done here.
-	if !s.Repo.PollUpdatesEnabled() && !s.Repo.PushUpdatesEnabled() {
+	if !s.Repo.PollUpdatesEnabled && !s.Repo.PushUpdatesEnabled {
 		s.completeShutdown()
 		return
 	}
 
 	var delay time.Duration
-	if s.Repo.PollUpdatesEnabled() {
+	if s.Repo.PollUpdatesEnabled {
 		delay = time.Duration(s.Repo.MsBetweenPolls) * time.Millisecond
 	}
 

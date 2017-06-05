@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"io/ioutil"
 )
 
 const (
@@ -22,6 +23,13 @@ type UrlPattern struct {
 	Anchor  string `json:"anchor"`
 }
 
+func newUrlPattern () (*UrlPattern){
+	return &UrlPattern{
+		defaultBaseUrl,
+		defaultAnchor,
+	}
+}
+
 type Repo struct {
 	Url               string         `json:"url"`
 	MsBetweenPolls    int            `json:"ms-between-poll"`
@@ -29,33 +37,35 @@ type Repo struct {
 	VcsConfigMessage  *SecretMessage `json:"vcs-config"`
 	UrlPattern        *UrlPattern    `json:"url-pattern"`
 	ExcludeDotFiles   bool           `json:"exclude-dot-files"`
-	EnablePollUpdates *bool          `json:"enable-poll-updates"`
-	EnablePushUpdates *bool          `json:"enable-push-updates"`
+	PollUpdatesEnabled bool          `json:"enable-poll-updates"`
+	PushUpdatesEnabled bool          `json:"enable-push-updates"`
 }
 
-// Used for interpreting the config value for fields that use *bool. If a value
-// is present, that value is returned. Otherwise, the default is returned.
-func optionToBool(val *bool, def bool) bool {
-	if val == nil {
-		return def
+func newRepo () *Repo {
+	return &Repo{
+		"",
+		defaultMsBetweenPoll,
+		defaultVcs,
+		new(SecretMessage),
+		newUrlPattern(),
+		true,
+		defaultPollEnabled,
+		defaultPushEnabled,
 	}
-	return *val
-}
-
-// Are polling based updates enabled on this repo?
-func (r *Repo) PollUpdatesEnabled() bool {
-	return optionToBool(r.EnablePollUpdates, defaultPollEnabled)
-}
-
-// Are push based updates enabled on this repo?
-func (r *Repo) PushUpdatesEnabled() bool {
-	return optionToBool(r.EnablePushUpdates, defaultPushEnabled)
 }
 
 type Config struct {
 	DbPath                string           `json:"dbpath"`
 	Repos                 map[string]*Repo `json:"repos"`
 	MaxConcurrentIndexers int              `json:"max-concurrent-indexers"`
+}
+
+func NewConfig() (*Config){
+	return &Config{
+		"",
+		make(map[string]*Repo, 1),
+		defaultMaxConcurrentIndexers,
+	}
 }
 
 // SecretMessage is just like json.RawMessage but it will not
@@ -86,66 +96,34 @@ func (r *Repo) VcsConfig() []byte {
 	return *r.VcsConfigMessage
 }
 
-// Populate missing config values with default values.
-func initRepo(r *Repo) {
-	if r.MsBetweenPolls == 0 {
-		r.MsBetweenPolls = defaultMsBetweenPoll
-	}
-
-	if r.Vcs == "" {
-		r.Vcs = defaultVcs
-	}
-
-	if r.UrlPattern == nil {
-		r.UrlPattern = &UrlPattern{
-			BaseUrl: defaultBaseUrl,
-			Anchor:  defaultAnchor,
-		}
-	} else {
-		if r.UrlPattern.BaseUrl == "" {
-			r.UrlPattern.BaseUrl = defaultBaseUrl
-		}
-
-		if r.UrlPattern.Anchor == "" {
-			r.UrlPattern.Anchor = defaultAnchor
-		}
-	}
-}
-
-// Populate missing config values with default values.
-func initConfig(c *Config) {
-	if c.MaxConcurrentIndexers == 0 {
-		c.MaxConcurrentIndexers = defaultMaxConcurrentIndexers
-	}
-}
-
-func (c *Config) LoadFromFile(filename string) error {
-	r, err := os.Open(filename)
-	if err != nil {
+func (r *Repo) UnmarshalJSON(b []byte) error {
+	type xrepo Repo
+	rep := xrepo(*newRepo())
+	if err := json.Unmarshal(b, &rep); err != nil {
 		return err
 	}
-	defer r.Close()
-
-	if err := json.NewDecoder(r).Decode(c); err != nil {
-		return err
-	}
-
-	if !filepath.IsAbs(c.DbPath) {
-		path, err := filepath.Abs(
-			filepath.Join(filepath.Dir(filename), c.DbPath))
-		if err != nil {
-			return err
-		}
-		c.DbPath = path
-	}
-
-	for _, repo := range c.Repos {
-		initRepo(repo)
-	}
-
-	initConfig(c)
-
+	*r = Repo(rep)
 	return nil
+}
+
+func LoadFromFile(filename string) (*Config, error) {
+	c := NewConfig()
+	r, err := os.Open(filename)
+	defer r.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	data, _ := ioutil.ReadAll(r)
+	if err := json.Unmarshal(data, c); err != nil {
+		return nil, err
+	}
+
+	c.DbPath, err = filepath.Abs(c.DbPath); if err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 func (c *Config) ToJsonString() (string, error) {

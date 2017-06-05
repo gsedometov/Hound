@@ -119,15 +119,15 @@ func main() {
 
 	flag.Parse()
 
-	var cfg config.Config
-	if err := cfg.LoadFromFile(*flagConf); err != nil {
+	cfg, err := config.LoadFromFile(*flagConf);
+	if err != nil {
 		panic(err)
 	}
 
 	// It's not safe to be killed during makeSearchers, so register the
 	// shutdown signal here and defer processing it until we are ready.
 	shutdownCh := registerShutdownSignal()
-	idx, ok, err := makeSearchers(&cfg)
+	idx, ok, err := makeSearchers(cfg)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -146,7 +146,7 @@ func main() {
 
 	info_log.Printf("running server at http://%s...\n", host)
 
-	if err := runHttp(*flagAddr, *flagDev, &cfg, idx); err != nil {
+	if err := runHttp(*flagAddr, *flagDev, cfg, idx); err != nil {
 		panic(err)
 	}
 }
